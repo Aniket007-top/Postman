@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "260792717207",
+    "project_id": "postman-d25d1",
+    "storage_bucket": "postman-d25d1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:260792717207:android:a321d90fea1527ac6b7ed2",
+        "android_client_info": {
+          "package_name": "com.beinganie.postman"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC189tQDs8nNlno2wB0E894J_F_N75g5H0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
