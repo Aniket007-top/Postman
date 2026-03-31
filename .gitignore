@@ -14,5 +14,7 @@
 .cxx
 local.properties
 .android-home/
+.android-user/
 .gradle-user/
+.kotlin/
 /.idea/

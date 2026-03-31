@@ -31,12 +31,14 @@ It currently includes:
 
 1. Open the project in Android Studio.
 2. Sync Gradle.
-3. If you want Firebase enabled, place your `google-services.json` file inside `app/`.
+3. If you want Firebase enabled, place your own `google-services.json` file inside `app/`.
 4. Run the app on an emulator or Android device.
 
 ## Firebase Notes
 
 The app can fall back to local sample data when Firebase is not configured. For realtime chat across devices, Firebase setup is required.
+
+Do not commit your personal `google-services.json` file if you want to keep the repository clean for public sharing.
 
 ## Repository
 
