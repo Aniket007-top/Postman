@@ -17,14 +17,18 @@ import com.beinganie.postman.chat.screens.WelcomeScreen
 @Composable
 fun PostmanApp(
     state: PostmanUiState,
-    onLogin: (String) -> Unit,
+    onLogin: (String, String) -> Unit,
+    onRegister: (String, String, String, String) -> Unit,
+    onResetPassword: (String) -> Unit,
     onCreateConversation: (String) -> Unit,
     onOpenConversation: (String) -> Unit,
     onOpenProfile: () -> Unit,
     onBackToChats: () -> Unit,
+    onLogout: () -> Unit,
     onUpdateProfile: (String, String, Uri?) -> Unit,
     onSendMessage: (String, String) -> Unit,
     onSendAttachment: (String, AttachmentComposerType, Uri?) -> Unit,
+    onDownloadAttachment: (String, String) -> Unit,
 ) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -49,7 +53,10 @@ fun PostmanApp(
                 modifier = screenModifier,
                 isFirebaseConfigured = state.isFirebaseConfigured,
                 isLoading = state.isLoading,
+                statusMessage = state.statusMessage,
                 onLogin = onLogin,
+                onRegister = onRegister,
+                onResetPassword = onResetPassword,
             )
 
             Screen.CHAT_LIST -> ChatListScreen(
@@ -66,12 +73,14 @@ fun PostmanApp(
                 onBackToChats = onBackToChats,
                 onSendMessage = onSendMessage,
                 onSendAttachment = onSendAttachment,
+                onDownloadAttachment = onDownloadAttachment,
             )
 
             Screen.PROFILE -> com.beinganie.postman.chat.screens.ProfileScreen(
                 modifier = screenModifier,
                 state = state,
                 onBackToChats = onBackToChats,
+                onLogout = onLogout,
                 onUpdateProfile = onUpdateProfile,
             )
         }

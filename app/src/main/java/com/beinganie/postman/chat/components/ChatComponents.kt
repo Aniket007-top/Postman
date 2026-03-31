@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AssistChip
@@ -34,6 +35,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.beinganie.postman.ui.theme.Mint
+import com.beinganie.postman.ui.theme.Slate
 import com.beinganie.postman.chat.AttachmentComposerType
 import com.beinganie.postman.chat.ChatMessage
 import com.beinganie.postman.chat.DeliveryState
@@ -46,38 +49,52 @@ fun UserAvatar(
     photoModel: Any?,
     modifier: Modifier = Modifier,
     size: Dp = 52.dp,
+    showPresence: Boolean = false,
+    isOnline: Boolean = false,
 ) {
     val hasPhoto = when (photoModel) {
         is String -> photoModel.isNotBlank()
         else -> photoModel != null
     }
 
-    Surface(
-        modifier = modifier.size(size),
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.primaryContainer,
-    ) {
-        if (hasPhoto) {
-            AsyncImage(
-                model = photoModel,
-                contentDescription = "$displayName profile photo",
-                modifier = Modifier
-                    .size(size)
-                    .clip(CircleShape),
-                contentScale = ContentScale.Crop,
-            )
-        } else {
-            Box(
-                modifier = Modifier.size(size),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = displayName.take(1).uppercase(),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    fontWeight = FontWeight.Bold,
+    Box(modifier = modifier.size(size)) {
+        Surface(
+            modifier = Modifier.size(size),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer,
+        ) {
+            if (hasPhoto) {
+                AsyncImage(
+                    model = photoModel,
+                    contentDescription = "$displayName profile photo",
+                    modifier = Modifier
+                        .size(size)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop,
                 )
+            } else {
+                Box(
+                    modifier = Modifier.size(size),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = displayName.take(1).uppercase(),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
+        }
+        if (showPresence) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(14.dp),
+                shape = CircleShape,
+                color = if (isOnline) Mint else Slate,
+                tonalElevation = 2.dp,
+            ) {}
         }
     }
 }
@@ -105,6 +122,7 @@ fun StatusBanner(
 fun ConversationHeader(
     title: String,
     participantCount: Int,
+    isOtherUserOnline: Boolean = false,
     onBack: () -> Unit,
 ) {
     Row(
@@ -126,13 +144,23 @@ fun ConversationHeader(
                 Text("Back")
             }
             Column {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Surface(
+                        modifier = Modifier.size(10.dp),
+                        shape = CircleShape,
+                        color = if (isOtherUserOnline) Mint else Slate,
+                    ) {}
+                }
                 Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    text = "Realtime private chat",
+                    text = if (isOtherUserOnline) "Online" else "Offline",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -149,27 +177,10 @@ fun ConversationHeader(
 }
 
 @Composable
-fun StorageNotice() {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest),
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text("Sync design", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Messages sync through Firestore in realtime. Shared files upload to Firebase Storage and the app stores file URLs plus local content URIs.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-fun MessageBubble(message: ChatMessage) {
+fun MessageBubble(
+    message: ChatMessage,
+    onAttachmentClick: (() -> Unit)? = null,
+) {
     val isMine = message.sender.isCurrentUser
     Row(
         modifier = Modifier
@@ -206,7 +217,11 @@ fun MessageBubble(message: ChatMessage) {
                 )
                 message.attachment?.let {
                     Spacer(modifier = Modifier.height(10.dp))
-                    AttachmentCard(attachment = it, isMine = isMine)
+                    AttachmentCard(
+                        attachment = it,
+                        isMine = isMine,
+                        onClick = onAttachmentClick,
+                    )
                 }
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
@@ -225,9 +240,10 @@ fun MessageBubble(message: ChatMessage) {
 fun AttachmentCard(
     attachment: MessageAttachment,
     isMine: Boolean,
+    onClick: (() -> Unit)? = null,
 ) {
     val title = when (attachment) {
-        is MessageAttachment.Image -> "Image"
+        is MessageAttachment.Image -> "Photo"
         is MessageAttachment.Video -> "Video"
         is MessageAttachment.Document -> "Document"
     }
@@ -236,17 +252,35 @@ fun AttachmentCard(
         is MessageAttachment.Video -> attachment.fileName
         is MessageAttachment.Document -> attachment.fileName
     }
-    val remoteUrl = when (attachment) {
-        is MessageAttachment.Image -> attachment.remoteUrl
-        is MessageAttachment.Video -> attachment.remoteUrl
-        is MessageAttachment.Document -> attachment.remoteUrl
+    val previewModel = when (attachment) {
+        is MessageAttachment.Image -> attachment.localPath.ifBlank { attachment.remoteUrl }
+        else -> null
+    }
+
+    val supportingLabel = when {
+        attachmentLocalPath(attachment).isNotBlank() -> "Saved on device"
+        onClick != null -> "Tap to download"
+        else -> null
     }
 
     Surface(
+        modifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier,
         shape = RoundedCornerShape(18.dp),
         color = if (isMine) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceBright,
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
+            if (attachment is MessageAttachment.Image && !previewModel.isNullOrBlank()) {
+                AsyncImage(
+                    model = previewModel,
+                    contentDescription = fileName,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp)
+                        .clip(RoundedCornerShape(14.dp)),
+                    contentScale = ContentScale.Crop,
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+            }
             Text(
                 text = title,
                 style = MaterialTheme.typography.labelLarge,
@@ -259,11 +293,14 @@ fun AttachmentCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = if (isMine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
             )
-            Text(
-                text = remoteUrl,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (isMine) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            supportingLabel?.let { label ->
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isMine) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -327,4 +364,10 @@ private fun deliveryLabel(state: DeliveryState): String = when (state) {
     DeliveryState.SENDING -> "Sending"
     DeliveryState.DELIVERED -> "Delivered"
     DeliveryState.READ -> "Read"
+}
+
+private fun attachmentLocalPath(attachment: MessageAttachment): String = when (attachment) {
+    is MessageAttachment.Image -> attachment.localPath
+    is MessageAttachment.Video -> attachment.localPath
+    is MessageAttachment.Document -> attachment.localPath
 }

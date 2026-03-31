@@ -2,6 +2,7 @@ package com.beinganie.postman.chat
 
 import android.app.Application
 import android.net.Uri
+import com.beinganie.postman.BuildConfig
 import com.google.firebase.FirebaseApp
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
@@ -9,12 +10,21 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
-import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.messaging.FirebaseMessaging
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.DataOutputStream
+import java.io.File
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -23,9 +33,9 @@ import java.util.UUID
 class PostmanRepository(
     private val application: Application,
 ) {
+    private val firebaseApp = FirebaseApp.initializeApp(application) ?: FirebaseApp.getApps(application).firstOrNull()
     private val auth = FirebaseAuth.getInstance()
     private val firestore = FirebaseFirestore.getInstance()
-    private val storage = FirebaseStorage.getInstance()
     private val contentResolver = application.contentResolver
     private val timeFormatter = SimpleDateFormat("hh:mm a", Locale.getDefault())
 
@@ -35,36 +45,31 @@ class PostmanRepository(
     private val _uiState = MutableStateFlow(
         PostmanUiState(
             screen = Screen.WELCOME,
-            isFirebaseConfigured = FirebaseApp.getApps(application).isNotEmpty(),
+            isFirebaseConfigured = firebaseApp != null,
             isRealtimeActive = false,
-            statusMessage = "Choose a username, then start chats by entering another person's username.",
+            statusMessage = null,
         ),
     )
 
     val uiState: StateFlow<PostmanUiState> = _uiState.asStateFlow()
 
-    suspend fun login(displayNameInput: String) {
-        val normalizedDisplay = displayNameInput.trim().ifBlank { "aniket" }
-        val username = normalizeUsername(normalizedDisplay)
-        setLoading(true, "Connecting to realtime backend...")
+    suspend fun login(emailInput: String, passwordInput: String) {
+        val email = emailInput.trim()
+        val password = passwordInput.trim()
+        if (email.isBlank() || password.isBlank()) {
+            setStatus("Enter email and password.")
+            return
+        }
+
+        setLoading(true, "Signing in...")
 
         runCatching {
-            if (auth.currentUser == null) {
-                auth.signInAnonymously().await()
-            }
+            auth.signInWithEmailAndPassword(email, password).await()
             val firebaseUser = requireNotNull(auth.currentUser)
-            val existingProfile = firestore.collection(USERS_COLLECTION)
-                .document(firebaseUser.uid)
-                .get()
-                .await()
-            val currentUser = ChatUser(
-                id = firebaseUser.uid,
-                displayName = normalizedDisplay,
-                username = username,
-                photoUrl = existingProfile.getString("photoUrl"),
-                isCurrentUser = true,
-            )
+            val currentUser = loadCurrentUserProfile(firebaseUser.uid)
             upsertUserProfile(currentUser)
+            syncFcmToken(firebaseUser.uid)
+            syncCurrentUserPresence(currentUser)
             observeConversations(currentUser)
             _uiState.update { current ->
                 current.copy(
@@ -73,7 +78,7 @@ class PostmanRepository(
                     isFirebaseConfigured = true,
                     isRealtimeActive = true,
                     isLoading = false,
-                    statusMessage = "Signed in as @${currentUser.username}. Start a chat by entering another username.",
+                    statusMessage = null,
                 )
             }
         }.getOrElse { error ->
@@ -82,6 +87,108 @@ class PostmanRepository(
                     isLoading = false,
                     isRealtimeActive = false,
                     statusMessage = "Realtime setup failed: ${error.message ?: "Unknown error"}",
+                )
+            }
+        }
+    }
+
+    suspend fun register(
+        displayNameInput: String,
+        usernameInput: String,
+        emailInput: String,
+        passwordInput: String,
+    ) {
+        val displayName = displayNameInput.trim().ifBlank { "User" }
+        val username = normalizeUsername(usernameInput)
+        val email = emailInput.trim()
+        val password = passwordInput.trim()
+
+        when {
+            username.isBlank() -> {
+                setStatus("Choose a username.")
+                return
+            }
+
+            email.isBlank() || password.isBlank() -> {
+                setStatus("Enter email and password.")
+                return
+            }
+
+            password.length < 6 -> {
+                setStatus("Password must be at least 6 characters.")
+                return
+            }
+        }
+
+        setLoading(true, "Creating account...")
+        runCatching {
+            auth.createUserWithEmailAndPassword(email, password).await()
+            val firebaseUser = requireNotNull(auth.currentUser)
+            val existingUser = firestore.collection(USERS_COLLECTION)
+                .whereEqualTo("username", username)
+                .limit(1)
+                .get()
+                .await()
+                .documents
+                .firstOrNull()
+            if (existingUser != null && existingUser.id != firebaseUser.uid) {
+                firebaseUser.delete().await()
+                error("Username @$username is already taken.")
+            }
+            val currentUser = ChatUser(
+                id = firebaseUser.uid,
+                displayName = displayName,
+                username = username,
+                photoUrl = null,
+                isOnline = true,
+                isCurrentUser = true,
+            )
+            upsertUserProfile(currentUser, email = email)
+            syncFcmToken(firebaseUser.uid)
+            syncCurrentUserPresence(currentUser)
+            observeConversations(currentUser)
+            _uiState.update { current ->
+                current.copy(
+                    currentUser = currentUser,
+                    screen = Screen.CHAT_LIST,
+                    isFirebaseConfigured = true,
+                    isRealtimeActive = true,
+                    isLoading = false,
+                    statusMessage = null,
+                )
+            }
+        }.getOrElse { error ->
+            _uiState.update { current ->
+                current.copy(
+                    isLoading = false,
+                    isRealtimeActive = false,
+                    statusMessage = error.message ?: "Could not create account.",
+                )
+            }
+        }
+    }
+
+    suspend fun resetPassword(emailInput: String) {
+        val email = emailInput.trim()
+        if (email.isBlank()) {
+            setStatus("Enter your email.")
+            return
+        }
+
+        setLoading(true, "Sending reset email...")
+        runCatching {
+            auth.sendPasswordResetEmail(email).await()
+            _uiState.update { current ->
+                current.copy(
+                    isLoading = false,
+                    statusMessage = "Reset link sent to $email.",
+                )
+            }
+        }.getOrElse { error ->
+            _uiState.update { current ->
+                current.copy(
+                    isLoading = false,
+                    statusMessage = error.message ?: "Could not send reset email.",
                 )
             }
         }
@@ -115,6 +222,7 @@ class PostmanRepository(
                 displayName = peerDocument.getString("displayName") ?: peerUsername,
                 username = peerDocument.getString("username") ?: peerUsername,
                 photoUrl = peerDocument.getString("photoUrl"),
+                isOnline = peerDocument.getBoolean("isOnline") == true,
             )
 
             val conversationId = listOf(currentUser.id, peerUser.id).sorted().joinToString("_")
@@ -127,6 +235,10 @@ class PostmanRepository(
                 "participantUsernames" to mapOf(
                     currentUser.id to currentUser.username,
                     peerUser.id to peerUser.username,
+                ),
+                "participantOnline" to mapOf(
+                    currentUser.id to true,
+                    peerUser.id to peerUser.isOnline,
                 ),
                 "preview" to "Start chatting",
                 "updatedAt" to FieldValue.serverTimestamp(),
@@ -142,7 +254,7 @@ class PostmanRepository(
             _uiState.update { current ->
                 current.copy(
                     isLoading = false,
-                    statusMessage = "Realtime chat ready with @${peerUser.username}.",
+                    statusMessage = null,
                 )
             }
         }.getOrElse { error ->
@@ -176,6 +288,21 @@ class PostmanRepository(
         }
     }
 
+    fun logout() {
+        markCurrentUserOffline()
+        conversationsListener?.remove()
+        conversationsListener = null
+        messagesListener?.remove()
+        messagesListener = null
+        auth.signOut()
+        _uiState.value = PostmanUiState(
+            screen = Screen.WELCOME,
+            isFirebaseConfigured = firebaseApp != null,
+            isRealtimeActive = false,
+            statusMessage = "You have been logged out.",
+        )
+    }
+
     suspend fun updateProfile(displayNameInput: String, usernameInput: String, photoUri: Uri?) {
         val currentUser = _uiState.value.currentUser ?: return
         val normalizedDisplay = displayNameInput.trim().ifBlank { currentUser.displayName }
@@ -196,17 +323,11 @@ class PostmanRepository(
             }
 
             val photoUrl = if (photoUri != null) {
-                val fileName = resolveFileName(photoUri, AttachmentComposerType.IMAGE)
-                val storageRef = storage.reference
-                    .child("profile_photos")
-                    .child(currentUser.id)
-                    .child("${UUID.randomUUID()}_$fileName")
-
-                contentResolver.openInputStream(photoUri)?.use { inputStream ->
-                    storageRef.putStream(inputStream).await()
-                } ?: error("Could not read the selected profile image.")
-
-                storageRef.downloadUrl.await().toString()
+                uploadToCloudinary(
+                    uri = photoUri,
+                    folder = "postman/profile_photos/${currentUser.id}",
+                    type = AttachmentComposerType.IMAGE,
+                ).secureUrl
             } else {
                 currentUser.photoUrl
             }
@@ -215,6 +336,7 @@ class PostmanRepository(
                 displayName = normalizedDisplay,
                 username = normalizedUsername,
                 photoUrl = photoUrl,
+                isOnline = currentUser.isOnline,
             )
 
             upsertUserProfile(updatedUser)
@@ -232,14 +354,14 @@ class PostmanRepository(
                     },
                     screen = Screen.CHAT_LIST,
                     isLoading = false,
-                    statusMessage = "Profile updated successfully.",
+                    statusMessage = "Profile saved.",
                 )
             }
         }.getOrElse { error ->
             _uiState.update { current ->
                 current.copy(
                     isLoading = false,
-                    statusMessage = error.message ?: "Could not update your profile.",
+                    statusMessage = uploadErrorMessage("profile update", error),
                 )
             }
         }
@@ -290,16 +412,11 @@ class PostmanRepository(
         setLoading(true, "Uploading ${type.name.lowercase()}...")
         runCatching {
             val fileName = resolveFileName(uri, type)
-            val storageRef = storage.reference
-                .child("chat_media")
-                .child(conversationId)
-                .child("${UUID.randomUUID()}_$fileName")
-
-            contentResolver.openInputStream(uri)?.use { inputStream ->
-                storageRef.putStream(inputStream).await()
-            } ?: error("Could not read the selected file.")
-
-            val downloadUrl = storageRef.downloadUrl.await().toString()
+            val uploadResult = uploadToCloudinary(
+                uri = uri,
+                folder = "postman/chat_media/$conversationId",
+                type = type,
+            )
             val messageId = UUID.randomUUID().toString()
             val sentAtMillis = System.currentTimeMillis()
             val payload = hashMapOf(
@@ -313,8 +430,8 @@ class PostmanRepository(
                 "deliveryState" to DeliveryState.DELIVERED.name,
                 "attachmentType" to type.name,
                 "attachmentFileName" to fileName,
-                "attachmentLocalPath" to uri.toString(),
-                "attachmentRemoteUrl" to downloadUrl,
+                "attachmentLocalPath" to "",
+                "attachmentRemoteUrl" to uploadResult.secureUrl,
             )
 
             firestore.collection(CONVERSATIONS_COLLECTION)
@@ -326,35 +443,116 @@ class PostmanRepository(
 
             updateConversationPreview(conversationId, attachmentLabel(type, fileName))
             _uiState.update { current ->
-                current.copy(isLoading = false, statusMessage = "Attachment shared in realtime.")
+                current.copy(isLoading = false, statusMessage = null)
             }
         }.getOrElse { error ->
             _uiState.update { current ->
                 current.copy(
                     isLoading = false,
-                    statusMessage = "Attachment upload failed: ${error.message ?: "Unknown error"}",
+                    statusMessage = uploadErrorMessage("${type.name.lowercase()} upload", error),
+                )
+            }
+        }
+    }
+
+    suspend fun downloadAttachment(conversationId: String, messageId: String) {
+        val currentUser = _uiState.value.currentUser ?: return
+        val conversation = _uiState.value.conversations.firstOrNull { it.id == conversationId } ?: return
+        val message = conversation.messages.firstOrNull { it.id == messageId } ?: return
+        val attachment = message.attachment ?: return
+
+        val localFile = localAttachmentFile(messageId, attachment)
+        if (localFile.exists()) {
+            setStatus("${attachmentFileLabel(attachment)} already saved on this device.")
+            return
+        }
+
+        setLoading(true, "Downloading ${attachmentFileLabel(attachment).lowercase()}...")
+        runCatching {
+            downloadRemoteFile(attachmentRemoteUrl(attachment), localFile)
+
+            _uiState.update { current ->
+                current.copy(
+                    conversations = current.conversations.map { currentConversation ->
+                        if (currentConversation.id != conversationId) {
+                            currentConversation
+                        } else {
+                            currentConversation.copy(
+                                messages = currentConversation.messages.map { currentMessage ->
+                                    if (currentMessage.id == messageId) {
+                                        currentMessage.copy(
+                                            attachment = currentMessage.attachment?.withLocalPath(localFile.toURI().toString()),
+                                        )
+                                    } else {
+                                        currentMessage
+                                    }
+                                },
+                            )
+                        }
+                    },
+                    isLoading = false,
+                    statusMessage = "${attachmentFileLabel(attachment)} saved to your device.",
+                )
+            }
+        }.getOrElse { error ->
+            _uiState.update { current ->
+                current.copy(
+                    isLoading = false,
+                    statusMessage = "Download failed: ${error.message ?: "Unknown error"}",
                 )
             }
         }
     }
 
     fun clear() {
+        markCurrentUserOffline()
         conversationsListener?.remove()
         conversationsListener = null
         messagesListener?.remove()
         messagesListener = null
     }
 
-    private suspend fun upsertUserProfile(user: ChatUser) {
+    private suspend fun upsertUserProfile(user: ChatUser, email: String? = auth.currentUser?.email) {
         val data = hashMapOf(
             "displayName" to user.displayName,
             "username" to user.username,
             "photoUrl" to user.photoUrl,
+            "isOnline" to user.isOnline,
+            "email" to email,
             "lastSeenAt" to FieldValue.serverTimestamp(),
         )
         firestore.collection(USERS_COLLECTION)
             .document(user.id)
             .set(data)
+            .await()
+    }
+
+    private suspend fun loadCurrentUserProfile(userId: String): ChatUser {
+        val profile = firestore.collection(USERS_COLLECTION)
+            .document(userId)
+            .get()
+            .await()
+        if (!profile.exists()) {
+            error("Account profile not found.")
+        }
+
+        val username = profile.getString("username").orEmpty()
+        val displayName = profile.getString("displayName").orEmpty().ifBlank { username.ifBlank { "User" } }
+        return ChatUser(
+            id = userId,
+            displayName = displayName,
+            username = username,
+            photoUrl = profile.getString("photoUrl"),
+            isOnline = true,
+            isCurrentUser = true,
+        )
+    }
+
+    private suspend fun syncFcmToken(userId: String) {
+        val token = runCatching { FirebaseMessaging.getInstance().token.await() }.getOrNull() ?: return
+        firestore.collection(USERS_COLLECTION)
+            .document(userId)
+            .set(mapOf("fcmToken" to token), com.google.firebase.firestore.SetOptions.merge())
             .await()
     }
 
@@ -369,9 +567,34 @@ class PostmanRepository(
                 mapOf(
                     "participantNames.${user.id}" to user.displayName,
                     "participantUsernames.${user.id}" to user.username,
+                    "participantOnline.${user.id}" to user.isOnline,
                 ),
             ).await()
         }
+    }
+
+    private suspend fun syncCurrentUserPresence(user: ChatUser) {
+        syncCurrentUserAcrossConversations(user)
+    }
+
+    private fun markCurrentUserOffline() {
+        val currentUser = _uiState.value.currentUser ?: return
+        firestore.collection(USERS_COLLECTION)
+            .document(currentUser.id)
+            .update(
+                mapOf(
+                    "isOnline" to false,
+                    "lastSeenAt" to FieldValue.serverTimestamp(),
+                ),
+            )
+        firestore.collection(CONVERSATIONS_COLLECTION)
+            .whereArrayContains("participantIds", currentUser.id)
+            .get()
+            .addOnSuccessListener { snapshot ->
+                snapshot.documents.forEach { document ->
+                    document.reference.update("participantOnline.${currentUser.id}", false)
+                }
+            }
     }
 
     private fun observeConversations(currentUser: ChatUser) {
@@ -420,7 +643,12 @@ class PostmanRepository(
                 }
 
                 val messages = snapshot?.documents
-                    ?.mapNotNull { document -> documentToMessage(document.data.orEmpty(), currentUser) }
+                    ?.mapNotNull { document ->
+                        documentToMessage(
+                            data = document.data.orEmpty(),
+                            currentUser = currentUser,
+                        )
+                    }
                     .orEmpty()
 
                 _uiState.update { current ->
@@ -458,6 +686,7 @@ class PostmanRepository(
         val participantIds = data["participantIds"] as? List<*> ?: return null
         val participantNames = data["participantNames"] as? Map<*, *> ?: emptyMap<Any, Any>()
         val participantUsernames = data["participantUsernames"] as? Map<*, *> ?: emptyMap<Any, Any>()
+        val participantOnline = data["participantOnline"] as? Map<*, *> ?: emptyMap<Any, Any>()
 
         val participants = participantIds.mapNotNull { rawId ->
             val userId = rawId as? String ?: return@mapNotNull null
@@ -468,6 +697,7 @@ class PostmanRepository(
                 displayName = displayName,
                 username = username,
                 photoUrl = null,
+                isOnline = participantOnline[userId] as? Boolean == true,
                 isCurrentUser = userId == currentUser.id,
             )
         }
@@ -505,6 +735,7 @@ class PostmanRepository(
                 displayName = senderDisplayName,
                 username = senderUsername,
                 photoUrl = null,
+                isOnline = false,
                 isCurrentUser = senderId == currentUser.id,
             ),
             text = data["text"] as? String ?: "",
@@ -518,8 +749,10 @@ class PostmanRepository(
     private fun attachmentFromDocument(data: Map<String, Any>): MessageAttachment? {
         val type = data["attachmentType"] as? String ?: return null
         val fileName = data["attachmentFileName"] as? String ?: "file"
-        val localPath = data["attachmentLocalPath"] as? String ?: ""
+        val messageId = data["id"] as? String ?: return null
         val remoteUrl = data["attachmentRemoteUrl"] as? String ?: ""
+        val localFile = localAttachmentFile(messageId, fileName)
+        val localPath = if (localFile.exists()) localFile.toURI().toString() else ""
         return when (type) {
             AttachmentComposerType.IMAGE.name -> MessageAttachment.Image(fileName, localPath, remoteUrl)
             AttachmentComposerType.VIDEO.name -> MessageAttachment.Video(fileName, localPath, remoteUrl)
@@ -552,6 +785,124 @@ class PostmanRepository(
         AttachmentComposerType.DOCUMENT -> "Shared document: $fileName"
     }
 
+    private suspend fun uploadToCloudinary(
+        uri: Uri,
+        folder: String,
+        type: AttachmentComposerType,
+    ): CloudinaryUploadResult = withContext(Dispatchers.IO) {
+        val cloudName = BuildConfig.CLOUDINARY_CLOUD_NAME.trim()
+        val uploadPreset = BuildConfig.CLOUDINARY_UPLOAD_PRESET.trim()
+        if (cloudName.isBlank() || uploadPreset.isBlank()) {
+            error("Cloudinary is not configured yet. Add CLOUDINARY_CLOUD_NAME and CLOUDINARY_UPLOAD_PRESET in gradle.properties.")
+        }
+
+        val boundary = "Boundary-${UUID.randomUUID()}"
+        val fileName = resolveFileName(uri, type)
+        val mimeType = contentResolver.getType(uri) ?: fallbackMimeType(type)
+        val endpoint = URL("https://api.cloudinary.com/v1_1/$cloudName/auto/upload")
+        val connection = (endpoint.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doInput = true
+            doOutput = true
+            useCaches = false
+            setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+        }
+
+        connection.outputStream.use { stream ->
+            DataOutputStream(stream).use { output ->
+                writeFormField(output, boundary, "upload_preset", uploadPreset)
+                writeFormField(output, boundary, "folder", folder)
+                output.writeBytes("--$boundary\r\n")
+                output.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"\r\n")
+                output.writeBytes("Content-Type: $mimeType\r\n\r\n")
+                contentResolver.openInputStream(uri)?.use { input ->
+                    input.copyTo(output)
+                } ?: error("Could not read the selected file.")
+                output.writeBytes("\r\n")
+                output.writeBytes("--$boundary--\r\n")
+                output.flush()
+            }
+        }
+
+        val responseCode = connection.responseCode
+        val responseText = readHttpResponse(connection, responseCode in 200..299)
+        if (responseCode !in 200..299) {
+            error("Cloudinary upload failed: $responseText")
+        }
+
+        val json = JSONObject(responseText)
+        val secureUrl = json.optString("secure_url").takeIf { it.isNotBlank() }
+            ?: error("Cloudinary did not return a secure URL.")
+        CloudinaryUploadResult(
+            secureUrl = secureUrl,
+        )
+    }
+
+    private fun writeFormField(output: DataOutputStream, boundary: String, name: String, value: String) {
+        output.writeBytes("--$boundary\r\n")
+        output.writeBytes("Content-Disposition: form-data; name=\"$name\"\r\n\r\n")
+        output.writeBytes("$value\r\n")
+    }
+
+    private fun readHttpResponse(connection: HttpURLConnection, success: Boolean): String {
+        val stream = if (success) connection.inputStream else connection.errorStream ?: connection.inputStream
+        return BufferedReader(InputStreamReader(stream)).use { reader ->
+            reader.readText()
+        }
+    }
+
+    private fun fallbackMimeType(type: AttachmentComposerType): String = when (type) {
+        AttachmentComposerType.IMAGE -> "image/jpeg"
+        AttachmentComposerType.VIDEO -> "video/mp4"
+        AttachmentComposerType.DOCUMENT -> "application/pdf"
+    }
+
+    private suspend fun downloadRemoteFile(remoteUrl: String, outputFile: File) = withContext(Dispatchers.IO) {
+        if (remoteUrl.isBlank()) error("This attachment no longer has a valid download link.")
+        outputFile.parentFile?.mkdirs()
+        val connection = (URL(remoteUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            doInput = true
+        }
+        val responseCode = connection.responseCode
+        if (responseCode !in 200..299) {
+            error("Remote file download failed with HTTP $responseCode.")
+        }
+        connection.inputStream.use { input ->
+            outputFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+    }
+
+    private fun localAttachmentFile(messageId: String, attachment: MessageAttachment): File =
+        localAttachmentFile(messageId, attachmentFileName(attachment))
+
+    private fun localAttachmentFile(messageId: String, fileName: String): File {
+        val safeName = fileName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val baseDir = application.getExternalFilesDir(null) ?: application.filesDir
+        val downloadDir = File(baseDir, "downloads").apply { mkdirs() }
+        return File(downloadDir, "${messageId}_$safeName")
+    }
+
+    private fun attachmentFileName(attachment: MessageAttachment): String = when (attachment) {
+        is MessageAttachment.Image -> attachment.fileName
+        is MessageAttachment.Video -> attachment.fileName
+        is MessageAttachment.Document -> attachment.fileName
+    }
+
+    private fun attachmentFileLabel(attachment: MessageAttachment): String = when (attachment) {
+        is MessageAttachment.Image -> "Photo"
+        is MessageAttachment.Video -> "Video"
+        is MessageAttachment.Document -> "Document"
+    }
+
+    private fun attachmentRemoteUrl(attachment: MessageAttachment): String = when (attachment) {
+        is MessageAttachment.Image -> attachment.remoteUrl
+        is MessageAttachment.Video -> attachment.remoteUrl
+        is MessageAttachment.Document -> attachment.remoteUrl
+    }
+
     private fun normalizeUsername(input: String): String = input
         .trim()
         .lowercase(Locale.getDefault())
@@ -568,9 +919,30 @@ class PostmanRepository(
         _uiState.update { current -> current.copy(isLoading = isLoading, statusMessage = message) }
     }
 
+    private fun uploadErrorMessage(action: String, error: Throwable): String {
+        val message = error.message.orEmpty()
+        return if ("Cloudinary is not configured yet" in message) {
+            message
+        } else if ("Cloudinary upload failed" in message) {
+            "$action failed: $message"
+        } else {
+            "${action.replaceFirstChar { it.uppercase() }} failed: ${error.message ?: "Unknown error"}"
+        }
+    }
+
     companion object {
         private const val USERS_COLLECTION = "users"
         private const val CONVERSATIONS_COLLECTION = "conversations"
         private const val MESSAGES_COLLECTION = "messages"
     }
+}
+
+private data class CloudinaryUploadResult(
+    val secureUrl: String,
+)
+
+private fun MessageAttachment.withLocalPath(localPath: String): MessageAttachment = when (this) {
+    is MessageAttachment.Image -> copy(localPath = localPath)
+    is MessageAttachment.Video -> copy(localPath = localPath)
+    is MessageAttachment.Document -> copy(localPath = localPath)
 }

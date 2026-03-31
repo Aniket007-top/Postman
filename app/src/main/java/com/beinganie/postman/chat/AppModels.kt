@@ -5,6 +5,7 @@ data class ChatUser(
     val displayName: String,
     val username: String,
     val photoUrl: String? = null,
+    val isOnline: Boolean = false,
     val isCurrentUser: Boolean = false,
 )
 

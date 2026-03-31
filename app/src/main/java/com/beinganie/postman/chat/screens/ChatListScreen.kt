@@ -1,9 +1,7 @@
 package com.beinganie.postman.chat.screens
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,7 +28,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.beinganie.postman.chat.ChatConversation
@@ -49,49 +46,62 @@ fun ChatListScreen(
     var peerUsername by remember { mutableStateOf("") }
 
     Column(modifier = modifier) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp, vertical = 18.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column {
-                Text("Chats", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text(
-                    text = "Signed in as @${state.currentUser?.username ?: "guest"}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
             Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Surface(shape = RoundedCornerShape(999.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
+                Column {
+                    Text("Chats", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text(
-                        text = when {
-                            state.isLoading -> "Working"
-                            state.isRealtimeActive -> "Realtime active"
-                            state.isFirebaseConfigured -> "Firebase ready"
-                            else -> "Offline"
-                        },
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.labelLarge,
+                        text = "@${state.currentUser?.username ?: "guest"}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Surface(
                     onClick = onOpenProfile,
-                    shape = CircleShape,
+                    shape = RoundedCornerShape(999.dp),
                     color = MaterialTheme.colorScheme.surfaceBright,
+                    tonalElevation = 2.dp,
                 ) {
-                    UserAvatar(
-                        displayName = state.currentUser?.displayName ?: "P",
-                        photoModel = state.currentUser?.photoUrl,
-                        modifier = Modifier.padding(4.dp),
-                        size = 44.dp,
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = state.currentUser?.displayName?.ifBlank { "Profile" } ?: "Profile",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        UserAvatar(
+                            displayName = state.currentUser?.displayName ?: "P",
+                            photoModel = state.currentUser?.photoUrl,
+                            size = 34.dp,
+                            showPresence = true,
+                            isOnline = true,
+                        )
+                    }
                 }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Surface(shape = RoundedCornerShape(999.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
+                Text(
+                    text = when {
+                        state.isLoading -> "Syncing"
+                        state.isRealtimeActive -> "Online"
+                        state.isFirebaseConfigured -> "Ready"
+                        else -> "Offline"
+                    },
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                )
             }
         }
         LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -104,12 +114,12 @@ fun ChatListScreen(
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(
-                            text = "Start a direct chat",
+                            text = "New chat",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            text = "Enter another user's username. If both phones use this app and Firebase is active, the chat syncs in realtime.",
+                            text = "Enter a username.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -130,17 +140,19 @@ fun ChatListScreen(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(18.dp),
                         ) {
-                            Text("Open Chat")
+                            Text("Open")
                         }
                     }
                 }
             }
             state.statusMessage?.let { message ->
-                item {
-                    StatusBanner(
-                        message = message,
-                        modifier = Modifier.padding(horizontal = 20.dp),
-                    )
+                if (message.shouldShowInChatList()) {
+                    item {
+                        StatusBanner(
+                            message = message,
+                            modifier = Modifier.padding(horizontal = 20.dp),
+                        )
+                    }
                 }
             }
             items(state.conversations) { conversation ->
@@ -149,6 +161,14 @@ fun ChatListScreen(
         }
     }
 }
+
+private fun String.shouldShowInChatList(): Boolean = listOf(
+    "failed",
+    "could not",
+    "not found",
+    "already taken",
+    "logged out",
+).any { keyword -> contains(keyword, ignoreCase = true) }
 
 @Composable
 private fun ChatListItem(
@@ -168,13 +188,13 @@ private fun ChatListItem(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box {
-                UserAvatar(
-                    displayName = conversation.title,
-                    photoModel = null,
-                    size = 52.dp,
-                )
-            }
+            UserAvatar(
+                displayName = conversation.title,
+                photoModel = null,
+                size = 52.dp,
+                showPresence = true,
+                isOnline = conversation.participants.firstOrNull { !it.isCurrentUser }?.isOnline == true,
+            )
             Column(modifier = Modifier.weight(1f)) {
                 Text(conversation.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(2.dp))

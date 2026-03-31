@@ -11,9 +11,21 @@ class PostmanViewModel(application: Application) : AndroidViewModel(application)
     private val repository = PostmanRepository(application)
     val uiState: StateFlow<PostmanUiState> = repository.uiState
 
-    fun login(displayName: String) {
+    fun login(email: String, password: String) {
         viewModelScope.launch {
-            repository.login(displayName)
+            repository.login(email, password)
+        }
+    }
+
+    fun register(displayName: String, username: String, email: String, password: String) {
+        viewModelScope.launch {
+            repository.register(displayName, username, email, password)
+        }
+    }
+
+    fun resetPassword(email: String) {
+        viewModelScope.launch {
+            repository.resetPassword(email)
         }
     }
 
@@ -37,6 +49,10 @@ class PostmanViewModel(application: Application) : AndroidViewModel(application)
         repository.backToChatList()
     }
 
+    fun logout() {
+        repository.logout()
+    }
+
     fun updateProfile(displayName: String, username: String, photoUri: Uri?) {
         viewModelScope.launch {
             repository.updateProfile(displayName, username, photoUri)
@@ -52,6 +68,12 @@ class PostmanViewModel(application: Application) : AndroidViewModel(application)
     fun sendAttachment(conversationId: String, type: AttachmentComposerType, uri: Uri? = null) {
         viewModelScope.launch {
             repository.sendAttachment(conversationId, type, uri)
+        }
+    }
+
+    fun downloadAttachment(conversationId: String, messageId: String) {
+        viewModelScope.launch {
+            repository.downloadAttachment(conversationId, messageId)
         }
     }
 

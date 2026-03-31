@@ -30,7 +30,6 @@ import com.beinganie.postman.chat.components.Composer
 import com.beinganie.postman.chat.components.ConversationHeader
 import com.beinganie.postman.chat.components.MessageBubble
 import com.beinganie.postman.chat.components.StatusBanner
-import com.beinganie.postman.chat.components.StorageNotice
 import com.beinganie.postman.ui.theme.PostmanTheme
 
 @Composable
@@ -40,6 +39,7 @@ fun ConversationScreen(
     onBackToChats: () -> Unit,
     onSendMessage: (String, String) -> Unit,
     onSendAttachment: (String, AttachmentComposerType, Uri?) -> Unit,
+    onDownloadAttachment: (String, String) -> Unit,
 ) {
     val conversation = state.conversations.firstOrNull { it.id == state.selectedConversationId } ?: return
     var draft by remember { mutableStateOf("") }
@@ -60,6 +60,7 @@ fun ConversationScreen(
         ConversationHeader(
             title = conversation.title,
             participantCount = conversation.participants.size,
+            isOtherUserOnline = conversation.participants.firstOrNull { !it.isCurrentUser }?.isOnline == true,
             onBack = onBackToChats,
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -69,17 +70,23 @@ fun ConversationScreen(
                 .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item { StorageNotice() }
             state.statusMessage?.let { message ->
-                item {
-                    StatusBanner(
-                        message = message,
-                        modifier = Modifier.padding(horizontal = 20.dp),
-                    )
+                if (message.shouldShowInConversation()) {
+                    item {
+                        StatusBanner(
+                            message = message,
+                            modifier = Modifier.padding(horizontal = 20.dp),
+                        )
+                    }
                 }
             }
             items(conversation.messages) { message ->
-                MessageBubble(message)
+                MessageBubble(
+                    message = message,
+                    onAttachmentClick = {
+                        onDownloadAttachment(conversation.id, message.id)
+                    },
+                )
             }
         }
         Composer(
@@ -104,6 +111,13 @@ fun ConversationScreen(
         )
     }
 }
+
+private fun String.shouldShowInConversation(): Boolean = listOf(
+    "failed",
+    "canceled",
+    "could not",
+    "already taken",
+).any { keyword -> contains(keyword, ignoreCase = true) }
 
 @Preview(showBackground = true)
 @Composable
@@ -150,6 +164,7 @@ private fun ConversationScreenPreview() {
             onBackToChats = {},
             onSendMessage = { _, _ -> },
             onSendAttachment = { _, _, _ -> },
+            onDownloadAttachment = { _, _ -> },
         )
     }
 }
