@@ -61,6 +61,18 @@ data class ChatConversation(
     val updatedAtMillis: Long,
 )
 
+data class FriendRequest(
+    val id: String,
+    val sender: ChatUser,
+    val receiverId: String,
+    val createdAtMillis: Long,
+)
+
+enum class ChatListTab {
+    REQUESTS,
+    NEW_CHAT,
+}
+
 enum class Screen {
     WELCOME,
     CHAT_LIST,
@@ -72,6 +84,8 @@ data class PostmanUiState(
     val currentUser: ChatUser? = null,
     val screen: Screen = Screen.WELCOME,
     val conversations: List<ChatConversation> = emptyList(),
+    val friendRequests: List<FriendRequest> = emptyList(),
+    val selectedChatListTab: ChatListTab = ChatListTab.NEW_CHAT,
     val selectedConversationId: String? = null,
     val isFirebaseConfigured: Boolean = false,
     val isRealtimeActive: Boolean = false,

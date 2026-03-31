@@ -1,24 +1,27 @@
 # Postman
 
-Postman is an Android chat app prototype built with Kotlin, Jetpack Compose, and Firebase.
+Postman is an Android private chat app built with Kotlin, Jetpack Compose, Firebase, and Cloudinary.
 
 It currently includes:
 
-- A welcome screen
-- A chat list screen
-- A conversation screen
-- A local fallback mode for UI testing
-- Firebase-ready wiring for realtime chat
+- Email/password sign up and sign in
+- Forgot-password reset by email
+- Friend requests before private chat starts
+- Realtime 1-to-1 text chat with Firestore
+- Cloudinary media upload for images, videos, documents, and profile photos
+- Push notifications with Firebase Cloud Messaging
+- Online/offline presence indicators
 
 ## Tech Stack
 
 - Kotlin
 - Jetpack Compose
 - Material 3
-- Android Navigation Compose
 - Firebase Authentication
 - Cloud Firestore
-- Firebase Storage
+- Firebase Cloud Messaging
+- Firebase Functions
+- Cloudinary
 
 ## Project Details
 
@@ -31,14 +34,45 @@ It currently includes:
 
 1. Open the project in Android Studio.
 2. Sync Gradle.
-3. If you want Firebase enabled, place your own `google-services.json` file inside `app/`.
-4. Run the app on an emulator or Android device.
+3. Add your Firebase `google-services.json` file inside `app/`.
+4. Add Cloudinary config in `gradle.properties`:
+   - `CLOUDINARY_CLOUD_NAME`
+   - `CLOUDINARY_UPLOAD_PRESET`
+5. Enable Firebase Authentication `Email/Password`.
+6. Add Firestore rules for `users`, `conversations`, `messages`, and `friend_requests`.
+7. Deploy the Firebase Function for push notifications.
+8. Run the app on an emulator or Android device.
 
 ## Firebase Notes
 
-The app can fall back to local sample data when Firebase is not configured. For realtime chat across devices, Firebase setup is required.
+Required Firestore rules for the current app:
 
-Do not commit your personal `google-services.json` file if you want to keep the repository clean for public sharing.
+```txt
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read, write: if request.auth != null;
+    }
+
+    match /conversations/{conversationId} {
+      allow read, write: if request.auth != null;
+    }
+
+    match /conversations/{conversationId}/messages/{messageId} {
+      allow read, write: if request.auth != null;
+    }
+
+    match /friend_requests/{requestId} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+```
+
+Push notifications require the Firebase Function in `functions/` to be deployed.
+
+Cloudinary handles media uploads because Firebase Storage on the current project was not used for this app setup.
 
 ## Repository
 

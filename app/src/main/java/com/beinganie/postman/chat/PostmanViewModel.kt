@@ -29,9 +29,15 @@ class PostmanViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun createConversation(peerUsername: String) {
+    fun sendFriendRequest(peerUsername: String) {
         viewModelScope.launch {
-            repository.createConversation(peerUsername)
+            repository.sendFriendRequest(peerUsername)
+        }
+    }
+
+    fun acceptFriendRequest(requestId: String) {
+        viewModelScope.launch {
+            repository.acceptFriendRequest(requestId)
         }
     }
 
@@ -43,6 +49,10 @@ class PostmanViewModel(application: Application) : AndroidViewModel(application)
 
     fun openProfile() {
         repository.openProfile()
+    }
+
+    fun selectChatListTab(tab: ChatListTab) {
+        repository.selectChatListTab(tab)
     }
 
     fun backToChatList() {

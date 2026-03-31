@@ -10,6 +10,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,6 +42,7 @@ class PostmanRepository(
 
     private var conversationsListener: ListenerRegistration? = null
     private var messagesListener: ListenerRegistration? = null
+    private var friendRequestsListener: ListenerRegistration? = null
 
     private val _uiState = MutableStateFlow(
         PostmanUiState(
@@ -71,6 +73,7 @@ class PostmanRepository(
             syncFcmToken(firebaseUser.uid)
             syncCurrentUserPresence(currentUser)
             observeConversations(currentUser)
+            observeFriendRequests(currentUser)
             _uiState.update { current ->
                 current.copy(
                     currentUser = currentUser,
@@ -147,6 +150,7 @@ class PostmanRepository(
             syncFcmToken(firebaseUser.uid)
             syncCurrentUserPresence(currentUser)
             observeConversations(currentUser)
+            observeFriendRequests(currentUser)
             _uiState.update { current ->
                 current.copy(
                     currentUser = currentUser,
@@ -194,19 +198,19 @@ class PostmanRepository(
         }
     }
 
-    suspend fun createConversation(peerUsernameInput: String) {
+    suspend fun sendFriendRequest(peerUsernameInput: String) {
         val currentUser = _uiState.value.currentUser ?: return
         val peerUsername = normalizeUsername(peerUsernameInput)
         if (peerUsername.isBlank()) {
-            setStatus("Enter a username to start a chat.")
+            setStatus("Enter a username.")
             return
         }
         if (peerUsername == currentUser.username) {
-            setStatus("Use another person's username to start a conversation.")
+            setStatus("Choose another user.")
             return
         }
 
-        setLoading(true, "Opening chat with @$peerUsername...")
+        setLoading(true, "Sending request...")
         runCatching {
             val peerSnapshot = firestore.collection(USERS_COLLECTION)
                 .whereEqualTo("username", peerUsername)
@@ -226,44 +230,130 @@ class PostmanRepository(
             )
 
             val conversationId = listOf(currentUser.id, peerUser.id).sorted().joinToString("_")
-            val conversationData = hashMapOf(
-                "participantIds" to listOf(currentUser.id, peerUser.id),
-                "participantNames" to mapOf(
-                    currentUser.id to currentUser.displayName,
-                    peerUser.id to peerUser.displayName,
-                ),
-                "participantUsernames" to mapOf(
-                    currentUser.id to currentUser.username,
-                    peerUser.id to peerUser.username,
-                ),
-                "participantOnline" to mapOf(
-                    currentUser.id to true,
-                    peerUser.id to peerUser.isOnline,
-                ),
-                "preview" to "Start chatting",
-                "updatedAt" to FieldValue.serverTimestamp(),
-                "updatedAtMillis" to System.currentTimeMillis(),
+            val existingConversation = firestore.collection(CONVERSATIONS_COLLECTION)
+                .document(conversationId)
+                .get()
+                .await()
+            if (existingConversation.exists()) {
+                error("You're already friends. Open the chat below.")
+            }
+
+            val outgoingRequestId = "${currentUser.id}_${peerUser.id}"
+            val existingOutgoingRequest = firestore.collection(FRIEND_REQUESTS_COLLECTION)
+                .document(outgoingRequestId)
+                .get()
+                .await()
+            if (existingOutgoingRequest.exists() && existingOutgoingRequest.getString("status") == REQUEST_STATUS_PENDING) {
+                error("Request already sent.")
+            }
+
+            val reverseRequestId = "${peerUser.id}_${currentUser.id}"
+            val incomingPendingRequest = firestore.collection(FRIEND_REQUESTS_COLLECTION)
+                .document(reverseRequestId)
+                .get()
+                .await()
+            if (incomingPendingRequest.exists() && incomingPendingRequest.getString("status") == REQUEST_STATUS_PENDING) {
+                _uiState.update { current ->
+                    current.copy(selectedChatListTab = ChatListTab.REQUESTS)
+                }
+                error("Open Friend requests and accept @$peerUsername.")
+            }
+
+            val requestData = hashMapOf(
+                "senderId" to currentUser.id,
+                "senderDisplayName" to currentUser.displayName,
+                "senderUsername" to currentUser.username,
+                "senderPhotoUrl" to currentUser.photoUrl,
+                "receiverId" to peerUser.id,
+                "receiverUsername" to peerUser.username,
+                "status" to REQUEST_STATUS_PENDING,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "createdAtMillis" to System.currentTimeMillis(),
             )
 
-            firestore.collection(CONVERSATIONS_COLLECTION)
-                .document(conversationId)
-                .set(conversationData)
+            firestore.collection(FRIEND_REQUESTS_COLLECTION)
+                .document(outgoingRequestId)
+                .set(requestData)
                 .await()
 
-            openConversation(conversationId)
             _uiState.update { current ->
                 current.copy(
                     isLoading = false,
-                    statusMessage = null,
+                    statusMessage = "Request sent to @${peerUser.username}.",
                 )
             }
         }.getOrElse { error ->
             _uiState.update { current ->
                 current.copy(
                     isLoading = false,
-                    statusMessage = error.message ?: "Could not open the conversation.",
+                    statusMessage = error.message ?: "Could not send request.",
                 )
             }
+        }
+    }
+
+    suspend fun acceptFriendRequest(requestId: String) {
+        val currentUser = _uiState.value.currentUser ?: return
+        setLoading(true, "Accepting request...")
+        runCatching {
+            val requestDocument = firestore.collection(FRIEND_REQUESTS_COLLECTION)
+                .document(requestId)
+                .get()
+                .await()
+            if (!requestDocument.exists()) {
+                error("This request is no longer available.")
+            }
+
+            val senderId = requestDocument.getString("senderId").orEmpty()
+            val senderUsername = requestDocument.getString("senderUsername").orEmpty()
+            val senderDisplayName = requestDocument.getString("senderDisplayName").orEmpty().ifBlank { senderUsername }
+            val senderPhotoUrl = requestDocument.getString("senderPhotoUrl")
+            if (requestDocument.getString("receiverId") != currentUser.id || senderId.isBlank()) {
+                error("This request can't be accepted.")
+            }
+
+            val peerUser = ChatUser(
+                id = senderId,
+                displayName = senderDisplayName,
+                username = senderUsername,
+                photoUrl = senderPhotoUrl,
+                isOnline = false,
+            )
+
+            val conversationId = ensureConversation(currentUser, peerUser)
+
+            firestore.collection(FRIEND_REQUESTS_COLLECTION)
+                .document(requestId)
+                .set(
+                    mapOf(
+                        "status" to REQUEST_STATUS_ACCEPTED,
+                        "acceptedAt" to FieldValue.serverTimestamp(),
+                    ),
+                    SetOptions.merge(),
+                )
+                .await()
+
+            _uiState.update { current ->
+                current.copy(
+                    isLoading = false,
+                    selectedChatListTab = ChatListTab.NEW_CHAT,
+                    statusMessage = "You are now connected with @${peerUser.username}.",
+                )
+            }
+            openConversation(conversationId)
+        }.getOrElse { error ->
+            _uiState.update { current ->
+                current.copy(
+                    isLoading = false,
+                    statusMessage = error.message ?: "Could not accept request.",
+                )
+            }
+        }
+    }
+
+    fun selectChatListTab(tab: ChatListTab) {
+        _uiState.update { current ->
+            current.copy(selectedChatListTab = tab)
         }
     }
 
@@ -292,6 +382,8 @@ class PostmanRepository(
         markCurrentUserOffline()
         conversationsListener?.remove()
         conversationsListener = null
+        friendRequestsListener?.remove()
+        friendRequestsListener = null
         messagesListener?.remove()
         messagesListener = null
         auth.signOut()
@@ -508,6 +600,8 @@ class PostmanRepository(
         markCurrentUserOffline()
         conversationsListener?.remove()
         conversationsListener = null
+        friendRequestsListener?.remove()
+        friendRequestsListener = null
         messagesListener?.remove()
         messagesListener = null
     }
@@ -554,6 +648,35 @@ class PostmanRepository(
             .document(userId)
             .set(mapOf("fcmToken" to token), com.google.firebase.firestore.SetOptions.merge())
             .await()
+    }
+
+    private suspend fun ensureConversation(currentUser: ChatUser, peerUser: ChatUser): String {
+        val conversationId = listOf(currentUser.id, peerUser.id).sorted().joinToString("_")
+        val conversationData = hashMapOf(
+            "participantIds" to listOf(currentUser.id, peerUser.id),
+            "participantNames" to mapOf(
+                currentUser.id to currentUser.displayName,
+                peerUser.id to peerUser.displayName,
+            ),
+            "participantUsernames" to mapOf(
+                currentUser.id to currentUser.username,
+                peerUser.id to peerUser.username,
+            ),
+            "participantOnline" to mapOf(
+                currentUser.id to true,
+                peerUser.id to peerUser.isOnline,
+            ),
+            "preview" to "Start chatting",
+            "updatedAt" to FieldValue.serverTimestamp(),
+            "updatedAtMillis" to System.currentTimeMillis(),
+        )
+
+        firestore.collection(CONVERSATIONS_COLLECTION)
+            .document(conversationId)
+            .set(conversationData, SetOptions.merge())
+            .await()
+
+        return conversationId
     }
 
     private suspend fun syncCurrentUserAcrossConversations(user: ChatUser) {
@@ -625,6 +748,30 @@ class PostmanRepository(
                         },
                         isRealtimeActive = true,
                     )
+                }
+            }
+    }
+
+    private fun observeFriendRequests(currentUser: ChatUser) {
+        friendRequestsListener?.remove()
+        friendRequestsListener = firestore.collection(FRIEND_REQUESTS_COLLECTION)
+            .whereEqualTo("receiverId", currentUser.id)
+            .whereEqualTo("status", REQUEST_STATUS_PENDING)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    setStatus("Request sync failed: ${error.message ?: "Unknown error"}")
+                    return@addSnapshotListener
+                }
+
+                val requests = snapshot?.documents
+                    ?.mapNotNull { document ->
+                        documentToFriendRequest(document.id, document.data.orEmpty(), currentUser)
+                    }
+                    ?.sortedByDescending { it.createdAtMillis }
+                    .orEmpty()
+
+                _uiState.update { current ->
+                    current.copy(friendRequests = requests)
                 }
             }
     }
@@ -743,6 +890,33 @@ class PostmanRepository(
             sentAtMillis = sentAtMillis,
             deliveryState = deliveryStateFromString(data["deliveryState"] as? String),
             attachment = attachment,
+        )
+    }
+
+    private fun documentToFriendRequest(
+        id: String,
+        data: Map<String, Any>,
+        currentUser: ChatUser,
+    ): FriendRequest? {
+        val senderId = data["senderId"] as? String ?: return null
+        val senderUsername = data["senderUsername"] as? String ?: return null
+        val senderDisplayName = data["senderDisplayName"] as? String ?: senderUsername
+        val createdAtMillis = (data["createdAtMillis"] as? Number)?.toLong()
+            ?: (data["createdAt"] as? Timestamp)?.toDate()?.time
+            ?: System.currentTimeMillis()
+
+        return FriendRequest(
+            id = id,
+            sender = ChatUser(
+                id = senderId,
+                displayName = senderDisplayName,
+                username = senderUsername,
+                photoUrl = data["senderPhotoUrl"] as? String,
+                isOnline = false,
+                isCurrentUser = senderId == currentUser.id,
+            ),
+            receiverId = data["receiverId"] as? String ?: currentUser.id,
+            createdAtMillis = createdAtMillis,
         )
     }
 
@@ -934,6 +1108,9 @@ class PostmanRepository(
         private const val USERS_COLLECTION = "users"
         private const val CONVERSATIONS_COLLECTION = "conversations"
         private const val MESSAGES_COLLECTION = "messages"
+        private const val FRIEND_REQUESTS_COLLECTION = "friend_requests"
+        private const val REQUEST_STATUS_PENDING = "pending"
+        private const val REQUEST_STATUS_ACCEPTED = "accepted"
     }
 }
 

@@ -20,8 +20,10 @@ fun PostmanApp(
     onLogin: (String, String) -> Unit,
     onRegister: (String, String, String, String) -> Unit,
     onResetPassword: (String) -> Unit,
-    onCreateConversation: (String) -> Unit,
+    onSendFriendRequest: (String) -> Unit,
+    onAcceptFriendRequest: (String) -> Unit,
     onOpenConversation: (String) -> Unit,
+    onSelectChatListTab: (ChatListTab) -> Unit,
     onOpenProfile: () -> Unit,
     onBackToChats: () -> Unit,
     onLogout: () -> Unit,
@@ -62,8 +64,10 @@ fun PostmanApp(
             Screen.CHAT_LIST -> ChatListScreen(
                 modifier = screenModifier,
                 state = state,
-                onCreateConversation = onCreateConversation,
+                onSendFriendRequest = onSendFriendRequest,
+                onAcceptFriendRequest = onAcceptFriendRequest,
                 onOpenConversation = onOpenConversation,
+                onSelectChatListTab = onSelectChatListTab,
                 onOpenProfile = onOpenProfile,
             )
 
