@@ -20,7 +20,9 @@ fun PostmanApp(
     onLogin: (String) -> Unit,
     onCreateConversation: (String) -> Unit,
     onOpenConversation: (String) -> Unit,
+    onOpenProfile: () -> Unit,
     onBackToChats: () -> Unit,
+    onUpdateProfile: (String, String, Uri?) -> Unit,
     onSendMessage: (String, String) -> Unit,
     onSendAttachment: (String, AttachmentComposerType, Uri?) -> Unit,
 ) {
@@ -55,6 +57,7 @@ fun PostmanApp(
                 state = state,
                 onCreateConversation = onCreateConversation,
                 onOpenConversation = onOpenConversation,
+                onOpenProfile = onOpenProfile,
             )
 
             Screen.CONVERSATION -> ConversationScreen(
@@ -63,6 +66,13 @@ fun PostmanApp(
                 onBackToChats = onBackToChats,
                 onSendMessage = onSendMessage,
                 onSendAttachment = onSendAttachment,
+            )
+
+            Screen.PROFILE -> com.beinganie.postman.chat.screens.ProfileScreen(
+                modifier = screenModifier,
+                state = state,
+                onBackToChats = onBackToChats,
+                onUpdateProfile = onUpdateProfile,
             )
         }
     }

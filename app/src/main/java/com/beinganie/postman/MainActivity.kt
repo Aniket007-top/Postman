@@ -26,7 +26,9 @@ class MainActivity : ComponentActivity() {
                     onLogin = viewModel::login,
                     onCreateConversation = viewModel::createConversation,
                     onOpenConversation = viewModel::openConversation,
+                    onOpenProfile = viewModel::openProfile,
                     onBackToChats = viewModel::backToChatList,
+                    onUpdateProfile = viewModel::updateProfile,
                     onSendMessage = viewModel::sendMessage,
                     onSendAttachment = viewModel::sendAttachment,
                 )

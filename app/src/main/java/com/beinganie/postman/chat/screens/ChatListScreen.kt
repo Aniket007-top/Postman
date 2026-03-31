@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import com.beinganie.postman.chat.ChatConversation
 import com.beinganie.postman.chat.PostmanUiState
 import com.beinganie.postman.chat.components.StatusBanner
+import com.beinganie.postman.chat.components.UserAvatar
 
 @Composable
 fun ChatListScreen(
@@ -43,6 +44,7 @@ fun ChatListScreen(
     state: PostmanUiState,
     onCreateConversation: (String) -> Unit,
     onOpenConversation: (String) -> Unit,
+    onOpenProfile: () -> Unit,
 ) {
     var peerUsername by remember { mutableStateOf("") }
 
@@ -62,17 +64,34 @@ fun ChatListScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Surface(shape = RoundedCornerShape(999.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
-                Text(
-                    text = when {
-                        state.isLoading -> "Working"
-                        state.isRealtimeActive -> "Realtime active"
-                        state.isFirebaseConfigured -> "Firebase ready"
-                        else -> "Offline"
-                    },
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.labelLarge,
-                )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(shape = RoundedCornerShape(999.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
+                    Text(
+                        text = when {
+                            state.isLoading -> "Working"
+                            state.isRealtimeActive -> "Realtime active"
+                            state.isFirebaseConfigured -> "Firebase ready"
+                            else -> "Offline"
+                        },
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+                Surface(
+                    onClick = onOpenProfile,
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceBright,
+                ) {
+                    UserAvatar(
+                        displayName = state.currentUser?.displayName ?: "P",
+                        photoModel = state.currentUser?.photoUrl,
+                        modifier = Modifier.padding(4.dp),
+                        size = 44.dp,
+                    )
+                }
             }
         }
         LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -149,18 +168,11 @@ private fun ChatListItem(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = conversation.title.take(1).uppercase(),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    fontWeight = FontWeight.Bold,
+            Box {
+                UserAvatar(
+                    displayName = conversation.title,
+                    photoModel = null,
+                    size = 52.dp,
                 )
             }
             Column(modifier = Modifier.weight(1f)) {

@@ -15,10 +15,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -28,13 +28,59 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.beinganie.postman.chat.AttachmentComposerType
 import com.beinganie.postman.chat.ChatMessage
 import com.beinganie.postman.chat.DeliveryState
 import com.beinganie.postman.chat.MessageAttachment
+import coil.compose.AsyncImage
+
+@Composable
+fun UserAvatar(
+    displayName: String,
+    photoModel: Any?,
+    modifier: Modifier = Modifier,
+    size: Dp = 52.dp,
+) {
+    val hasPhoto = when (photoModel) {
+        is String -> photoModel.isNotBlank()
+        else -> photoModel != null
+    }
+
+    Surface(
+        modifier = modifier.size(size),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.primaryContainer,
+    ) {
+        if (hasPhoto) {
+            AsyncImage(
+                model = photoModel,
+                contentDescription = "$displayName profile photo",
+                modifier = Modifier
+                    .size(size)
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Box(
+                modifier = Modifier.size(size),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = displayName.take(1).uppercase(),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+    }
+}
 
 @Composable
 fun StatusBanner(

@@ -53,10 +53,15 @@ class PostmanRepository(
                 auth.signInAnonymously().await()
             }
             val firebaseUser = requireNotNull(auth.currentUser)
+            val existingProfile = firestore.collection(USERS_COLLECTION)
+                .document(firebaseUser.uid)
+                .get()
+                .await()
             val currentUser = ChatUser(
                 id = firebaseUser.uid,
                 displayName = normalizedDisplay,
                 username = username,
+                photoUrl = existingProfile.getString("photoUrl"),
                 isCurrentUser = true,
             )
             upsertUserProfile(currentUser)
@@ -109,6 +114,7 @@ class PostmanRepository(
                 id = peerDocument.id,
                 displayName = peerDocument.getString("displayName") ?: peerUsername,
                 username = peerDocument.getString("username") ?: peerUsername,
+                photoUrl = peerDocument.getString("photoUrl"),
             )
 
             val conversationId = listOf(currentUser.id, peerUser.id).sorted().joinToString("_")
@@ -156,11 +162,86 @@ class PostmanRepository(
         observeMessages(conversationId)
     }
 
+    fun openProfile() {
+        _uiState.update { current ->
+            current.copy(screen = Screen.PROFILE)
+        }
+    }
+
     fun backToChatList() {
         messagesListener?.remove()
         messagesListener = null
         _uiState.update { current ->
             current.copy(screen = Screen.CHAT_LIST, selectedConversationId = null)
+        }
+    }
+
+    suspend fun updateProfile(displayNameInput: String, usernameInput: String, photoUri: Uri?) {
+        val currentUser = _uiState.value.currentUser ?: return
+        val normalizedDisplay = displayNameInput.trim().ifBlank { currentUser.displayName }
+        val normalizedUsername = normalizeUsername(usernameInput).ifBlank { currentUser.username }
+
+        setLoading(true, "Saving profile...")
+        runCatching {
+            val existingUser = firestore.collection(USERS_COLLECTION)
+                .whereEqualTo("username", normalizedUsername)
+                .limit(1)
+                .get()
+                .await()
+                .documents
+                .firstOrNull()
+
+            if (existingUser != null && existingUser.id != currentUser.id) {
+                error("Username @$normalizedUsername is already taken.")
+            }
+
+            val photoUrl = if (photoUri != null) {
+                val fileName = resolveFileName(photoUri, AttachmentComposerType.IMAGE)
+                val storageRef = storage.reference
+                    .child("profile_photos")
+                    .child(currentUser.id)
+                    .child("${UUID.randomUUID()}_$fileName")
+
+                contentResolver.openInputStream(photoUri)?.use { inputStream ->
+                    storageRef.putStream(inputStream).await()
+                } ?: error("Could not read the selected profile image.")
+
+                storageRef.downloadUrl.await().toString()
+            } else {
+                currentUser.photoUrl
+            }
+
+            val updatedUser = currentUser.copy(
+                displayName = normalizedDisplay,
+                username = normalizedUsername,
+                photoUrl = photoUrl,
+            )
+
+            upsertUserProfile(updatedUser)
+            syncCurrentUserAcrossConversations(updatedUser)
+
+            _uiState.update { current ->
+                current.copy(
+                    currentUser = updatedUser,
+                    conversations = current.conversations.map { conversation ->
+                        conversation.copy(
+                            participants = conversation.participants.map { participant ->
+                                if (participant.id == updatedUser.id) updatedUser else participant
+                            },
+                        )
+                    },
+                    screen = Screen.CHAT_LIST,
+                    isLoading = false,
+                    statusMessage = "Profile updated successfully.",
+                )
+            }
+        }.getOrElse { error ->
+            _uiState.update { current ->
+                current.copy(
+                    isLoading = false,
+                    statusMessage = error.message ?: "Could not update your profile.",
+                )
+            }
         }
     }
 
@@ -268,12 +349,29 @@ class PostmanRepository(
         val data = hashMapOf(
             "displayName" to user.displayName,
             "username" to user.username,
+            "photoUrl" to user.photoUrl,
             "lastSeenAt" to FieldValue.serverTimestamp(),
         )
         firestore.collection(USERS_COLLECTION)
             .document(user.id)
             .set(data)
             .await()
+    }
+
+    private suspend fun syncCurrentUserAcrossConversations(user: ChatUser) {
+        val snapshot = firestore.collection(CONVERSATIONS_COLLECTION)
+            .whereArrayContains("participantIds", user.id)
+            .get()
+            .await()
+
+        snapshot.documents.forEach { document ->
+            document.reference.update(
+                mapOf(
+                    "participantNames.${user.id}" to user.displayName,
+                    "participantUsernames.${user.id}" to user.username,
+                ),
+            ).await()
+        }
     }
 
     private fun observeConversations(currentUser: ChatUser) {
@@ -369,6 +467,7 @@ class PostmanRepository(
                 id = userId,
                 displayName = displayName,
                 username = username,
+                photoUrl = null,
                 isCurrentUser = userId == currentUser.id,
             )
         }
@@ -405,6 +504,7 @@ class PostmanRepository(
                 id = senderId,
                 displayName = senderDisplayName,
                 username = senderUsername,
+                photoUrl = null,
                 isCurrentUser = senderId == currentUser.id,
             ),
             text = data["text"] as? String ?: "",

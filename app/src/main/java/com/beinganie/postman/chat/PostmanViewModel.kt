@@ -29,8 +29,18 @@ class PostmanViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun openProfile() {
+        repository.openProfile()
+    }
+
     fun backToChatList() {
         repository.backToChatList()
+    }
+
+    fun updateProfile(displayName: String, username: String, photoUri: Uri?) {
+        viewModelScope.launch {
+            repository.updateProfile(displayName, username, photoUri)
+        }
     }
 
     fun sendMessage(conversationId: String, text: String) {

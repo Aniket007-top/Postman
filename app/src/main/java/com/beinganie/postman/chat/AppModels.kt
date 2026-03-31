@@ -4,6 +4,7 @@ data class ChatUser(
     val id: String,
     val displayName: String,
     val username: String,
+    val photoUrl: String? = null,
     val isCurrentUser: Boolean = false,
 )
 
@@ -63,6 +64,7 @@ enum class Screen {
     WELCOME,
     CHAT_LIST,
     CONVERSATION,
+    PROFILE,
 }
 
 data class PostmanUiState(
