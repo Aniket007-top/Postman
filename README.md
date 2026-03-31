@@ -30,19 +30,6 @@ It currently includes:
 - Target SDK: 35
 - Compile SDK: 35
 
-## Run Locally
-
-1. Open the project in Android Studio.
-2. Sync Gradle.
-3. Add your Firebase `google-services.json` file inside `app/`.
-4. Add Cloudinary config in `gradle.properties`:
-   - `CLOUDINARY_CLOUD_NAME`
-   - `CLOUDINARY_UPLOAD_PRESET`
-5. Enable Firebase Authentication `Email/Password`.
-6. Add Firestore rules for `users`, `conversations`, `messages`, and `friend_requests`.
-7. Deploy the Firebase Function for push notifications.
-8. Run the app on an emulator or Android device.
-
 ## Firebase Notes
 
 Required Firestore rules for the current app:
